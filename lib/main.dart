@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:custom_info_window/custom_info_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:googlemap/places_json_model.dart';
 import 'package:location/location.dart' as loc;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:http/http.dart' as http;
 
 import 'config.dart';
 
@@ -46,6 +50,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final Completer<GoogleMapController> _controller = Completer();
   final CustomInfoWindowController windowController =
       CustomInfoWindowController(); // initializing the controller to customize the info window on marker
+  final TextEditingController _searchController = TextEditingController();
 
   final Set<Marker> _markerSet = {};
   final Set<Polygon> _polygons = HashSet<Polygon>();
@@ -53,10 +58,19 @@ class _MyHomePageState extends State<MyHomePage> {
   final List<LatLng> _polyCoordinates = [];
   final loc.Location userLoc = loc.Location();
 
-  BitmapDescriptor _currentLocationIcon = BitmapDescriptor.defaultMarker;
-
   late LatLng? _currentLocation;
   late String _mapStyleString;
+
+  // created list of locations to display polygon, to draw polygons starting and ending point must be same
+  final List<LatLng> _points = const [
+    LatLng(28.855418265329643, 77.58909526476833),
+    LatLng(28.798975211980494, 77.6181092467462),
+    LatLng(28.82892925652713, 77.56899103035926),
+    LatLng(28.855418265329643, 77.58909526476833),
+  ];
+
+  BitmapDescriptor _currentLocationIcon = BitmapDescriptor.defaultMarker;
+  List<Predictions> _placeList = [];
 
   void _multiMarkers() {
     /*
@@ -64,16 +78,20 @@ class _MyHomePageState extends State<MyHomePage> {
     which shows its ID (you can write anything here to describe the place) and a rotation of 90 degrees. The rotation param is very useful when you have multiple markers at the same place.
      */
     _markerSet.add(Marker(
-        markerId: const MarkerId("Marker3"),
-        position: const LatLng(28.755361884833104, 77.78933129915275),
+        markerId: const MarkerId("Marker2"),
+        position: const LatLng(28.729681986165, 77.78510346601946),
         infoWindow: InfoWindow(
             title: "Hapur",
             onTap: () async {
-              await showAddress(28.755361884833104, 77.78933129915275);
+              await showAddress(28.729681986165, 77.78510346601946);
+              windowController.addInfoWindow!(
+                  // it will display when user click on title of marker
+                  windowContainer(),
+                  const LatLng(28.729681986165, 77.78510346601946));
             }),
         rotation: 90));
     _markerSet.add(Marker(
-        markerId: const MarkerId("Marker4"),
+        markerId: const MarkerId("Marker3"),
         position: const LatLng(28.82892925652713, 77.56899103035926),
         infoWindow: InfoWindow(
             title: 'Yo China Modinagar',
@@ -81,51 +99,15 @@ class _MyHomePageState extends State<MyHomePage> {
               await showAddress(28.82892925652713, 77.56899103035926);
               windowController.addInfoWindow!(
                   // it will display when user click on title of marker
-                  Container(
-                    width: MediaQuery.of(context).size.width,
-                    height: double.infinity,
-                    decoration: BoxDecoration(
-                        color: Theme.of(context).scaffoldBackgroundColor,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey)),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: const BorderRadius.vertical(
-                                top: Radius.circular(12)),
-                            child: Image.network(
-                              height: 100,
-                              width: MediaQuery.of(context).size.width,
-                              loadingBuilder: (BuildContext context,
-                                  Widget child,
-                                  ImageChunkEvent? loadingProgress) {
-                                if (loadingProgress == null) {
-                                  return child;
-                                }
-                                return const CircularProgressIndicator();
-                              },
-                              "https://lh5.googleusercontent.com/p/AF1QipPhRmGh1T1N1dqq7ZMFv63e9zxt27ChQ-zlMXGF=w408-h306-k-no",
-                              filterQuality: FilterQuality.high,
-                              fit: BoxFit.fitWidth,
-                            ),
-                          ),
-                        ),
-                        const Padding(
-                            padding: EdgeInsets.only(top: 8.0, left: 8.0),
-                            child: Text("Yo China Modinagar")),
-                        const Padding(
-                            padding: EdgeInsets.only(left: 8.0, bottom: 6.0),
-                            child: Text("Fast Food Restaurant"))
-                      ],
-                    ),
-                  ),
+                  windowContainer(
+                      img:
+                          "https://lh5.googleusercontent.com/p/AF1QipPhRmGh1T1N1dqq7ZMFv63e9zxt27ChQ-zlMXGF=w408-h306-k-no",
+                      title: "Yo China Modinagar",
+                      subtitle: "Fast Food Restaurant"),
                   const LatLng(28.82892925652713, 77.56899103035926));
             })));
     _markerSet.add(Marker(
-        markerId: const MarkerId("Marker5"),
+        markerId: const MarkerId("Marker4"),
         position: const LatLng(28.798975211980494, 77.6181092467462),
         infoWindow: InfoWindow(
             title: 'Bhojpur Toll Plaza 2',
@@ -133,73 +115,25 @@ class _MyHomePageState extends State<MyHomePage> {
               await showAddress(28.798975211980494, 77.6181092467462);
               windowController.addInfoWindow!(
                   // it will display when user click on title of marker
-                  Container(
-                    width: MediaQuery.of(context).size.width,
-                    height: double.infinity,
-                    decoration: BoxDecoration(
-                        color: Theme.of(context).scaffoldBackgroundColor,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey)),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: const BorderRadius.vertical(
-                                top: Radius.circular(12)),
-                            child: Image.network(
-                              height: 100,
-                              width: MediaQuery.of(context).size.width,
-                              loadingBuilder: (BuildContext context,
-                                  Widget child,
-                                  ImageChunkEvent? loadingProgress) {
-                                if (loadingProgress == null) {
-                                  return child;
-                                }
-                                return const Center(
-                                    child: SizedBox(
-                                        width: 40,
-                                        child: CircularProgressIndicator()));
-                              },
-                              "https://lh5.googleusercontent.com/p/AF1QipPhRmGh1T1N1dqq7ZMFv63e9zxt27ChQ-zlMXGF=w408-h306-k-no",
-                              filterQuality: FilterQuality.high,
-                              fit: BoxFit.fitWidth,
-                            ),
-                          ),
-                        ),
-                        const Padding(
-                            padding: EdgeInsets.only(top: 8.0, left: 8.0),
-                            child: Text("Yo China Modinagar")),
-                        const Padding(
-                            padding: EdgeInsets.only(left: 8.0, bottom: 6.0),
-                            child: Text("Fast Food Restaurant"))
-                      ],
-                    ),
-                  ),
+                  windowContainer(
+                      img:
+                          "https://lh5.googleusercontent.com/p/AF1QipPhRmGh1T1N1dqq7ZMFv63e9zxt27ChQ-zlMXGF=w408-h306-k-no",
+                      title: "Yo China Modinagar",
+                      subtitle: "Fast Food Restaurant"),
                   const LatLng(28.798975211980494, 77.6181092467462));
             })));
   }
 
-  // created list of locations to display polygon, to draw polygons starting and ending point must be same
-  List<LatLng> points = const [
-    LatLng(28.855418265329643, 77.58909526476833),
-    LatLng(28.798975211980494, 77.6181092467462),
-    LatLng(28.82892925652713, 77.56899103035926),
-    LatLng(28.855418265329643, 77.58909526476833),
-  ];
-
   void _polygonPoints() {
     //initialize polygon
     _polygons.add(Polygon(
-      // given polygonId
-      polygonId: const PolygonId('Polygon1'),
-      // initialize the list of points to display polygon
-      points: points,
-      // given color to polygon
-      fillColor: Colors.green.withOpacity(0.3),
-      // given border color to polygon
-      strokeColor: Colors.green,
+      polygonId: const PolygonId('Polygon1'), // given polygonId
+
+      points: _points, // initialize the list of points to display polygon
+
+      fillColor: Colors.green.withOpacity(0.3), // given color to polygon
+
+      //strokeColor: Colors.green, // given border color to polygon
       strokeWidth: 4, // given width of border
       geodesic:
           true, //Indicates whether the segments of the polygon should be drawn as geodesics, as opposed to straight lines on the Mercator projection.
@@ -208,49 +142,100 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _polylinePoints() {
+    //initialize polyline
     _polylines.add(Polyline(
-        polylineId: const PolylineId('Polyline1'),
-        points: points,
-        color: Colors.blue,
-        width: 4));
+        polylineId: const PolylineId('Polyline1'), // given polylineId
+        points: _points, // initialize the list of points to display polyline
+
+        color: Colors.blue, // given color to polyline
+        width: 4 // given width of border
+        ));
     _polylines.add(Polyline(
         polylineId: const PolylineId('Polyline2'),
         points: _polyCoordinates,
         color: Colors.redAccent,
         width: 4));
-    setState(() {});
   }
 
   void _getPolyPointsRoute() async {
     try {
       PolylinePoints polylinePoints = PolylinePoints();
       PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
-        Config.googleMapKey,
-        const PointLatLng(28.855418265329643, 77.58909526476833),
-        const PointLatLng(28.82892925652713, 77.56899103035926),
-        travelMode: TravelMode.driving,
-        wayPoints: [PolylineWayPoint(location: "Meerut Rd")],
+        Config.googleMapKey, // your Google Map API key
+        const PointLatLng(
+            28.855418265329643, 77.58909526476833), // source coordinates
+        const PointLatLng(
+            28.82892925652713, 77.56899103035926), //destination coordinates
+        travelMode: TravelMode
+            .driving, // travel mode such as driving, walking, cycling etc.
+        wayPoints: [
+          PolylineWayPoint(location: "Goivndpuri Modinagar via Meerut Rd"),
+          PolylineWayPoint(location: "Modi Mandir Modinagar via Meerut Rd")
+        ],
+        //An array of PolylineWayPoint objects to specify intermediate waypoints along the route.
+        // Each PolylineWayPoint can either have a location (address string) or latLng (coordinates).
       );
 
+      //The result object contains information about the calculated route: points: A list of PointLatLng objects representing the coordinates of the polyline.
       if (result.points.isNotEmpty) {
         for (var point in result.points) {
           _polyCoordinates.add(LatLng(point.latitude, point.longitude));
         }
+      } else {
+        // You can display an error message to the user here
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No route found')),
+        );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      if (e is SocketException) {
+        // Handle network issues (e.g., no internet connection)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Network error. Please check your connection.')),
+        );
+      } else if (e is TimeoutException) {
+        // Handle timeouts
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Request timed out. Please try again later.')),
+        );
+      } else if (e.toString().contains('key')) {
+        // Handle potential API key issues (this is a heuristic check)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid or missing API key.')),
+        );
+      } else {
+        // Handle other unknown errors
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('An unexpected error occurred: ${e.toString()}')),
+        );
+      }
     }
   }
 
   void _customMarker() {
     BitmapDescriptor.asset(
             ImageConfiguration.empty, "assets/images/user_pic.png",
-            width: 28, height: 28)
+            width: 40, height: 40)
         .then((icon) {
       _currentLocationIcon = icon;
     });
+  }
+
+  void _locationListener() async {
+    userLoc.onLocationChanged.listen((change) {
+      _currentLocation = LatLng(change.latitude!, change.longitude!);
+      setState(() {});
+    });
+  }
+
+  void _onChanged() {
+    if (_searchController.text.isNotEmpty &&
+        _searchController.text.length >= 3) {
+      getSuggestion(_searchController.text);
+    }
   }
 
   @override
@@ -269,87 +254,147 @@ class _MyHomePageState extends State<MyHomePage> {
     _getPolyPointsRoute();
     _polylinePoints();
     _locationListener();
-  }
-
-  Future<void> _requestPermission() async {
-    var status = await Permission.locationWhenInUse.request();
-    if (status.isGranted) {
-      _getUserCurrentLocation();
-    } else {
-      // Handle the case where permission is denied.
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Location permission is required to show Location button.')),
-      );
-    }
+    _searchController.addListener(() {
+      _onChanged();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Scaffold(
-        body: _currentLocation == null
-            ? const Center(child: CircularProgressIndicator())
-            : Stack(children: [
-                GoogleMap(
-                  // in the below line, setting camera position, with the latitude and longitude of the location you want to display on the map.
-                  initialCameraPosition: CameraPosition(
-                    target: _currentLocation ?? const LatLng(0, 0),
-                    zoom: 14,
-                  ),
-                  // in the below line, specifying map type.
-                  mapType: MapType.normal,
-                  // in the below line, setting user location enabled.
-                  myLocationEnabled: true,
-                  myLocationButtonEnabled: true,
-                  // in the below line, setting compass enabled.
-                  compassEnabled: true,
-                  // You can turn on traffic mode by simply setting the value of trafficEnabled to true.
-                  trafficEnabled: true,
-                  tiltGesturesEnabled: true,
-                  scrollGesturesEnabled: true,
-                  zoomGesturesEnabled: true,
-                  style: _mapStyleString, //styling the google map theme
-                  // in the below line, specifying controller on map complete.
-                  onMapCreated: (GoogleMapController controller) {
-                    _controller.complete(
-                        controller); //is a callback that’s called when the map is ready to use. It provides the GoogleMapController, which is really helpful for performing certain actions on the map.
-                    windowController.googleMapController = controller;
-                    if (_currentLocation != null) {
-                      controller.animateCamera(
-                        CameraUpdate.newCameraPosition(
-                          CameraPosition(
-                            target: _currentLocation!,
-                            zoom: 14,
+        resizeToAvoidBottomInset: false,
+        body: Stack(children: [
+          _currentLocation == null
+              ? const Center(child: CircularProgressIndicator())
+              : (_searchController.text.isEmpty)
+                  ? GoogleMap(
+                      // in the below line, setting camera position, with the latitude and longitude of the location you want to display on the map.
+                      initialCameraPosition: CameraPosition(
+                        target: _currentLocation ??
+                            const LatLng(28.82892925652713, 77.56899103035926),
+                        zoom: 14,
+                      ),
+
+                      mapType: MapType
+                          .normal, // in the below line, specifying map type.
+                      myLocationEnabled:
+                          true, // setting user location enabled. animates to focus on the user's current location if the user's location is currently known.
+                      myLocationButtonEnabled:
+                          true, //The my-location button causes the camera to move such that the user's location is in the center of the map.
+                      compassEnabled:
+                          true, // in the below line, setting compass enabled.
+                      trafficEnabled:
+                          true, // You can turn on traffic mode by simply setting the value of trafficEnabled to true.
+                      tiltGesturesEnabled:
+                          true, //True if the map view should respond to tilt gestures.
+                      scrollGesturesEnabled:
+                          true, //True if the map view should respond to scroll gestures.
+                      zoomGesturesEnabled:
+                          true, //True if the map view should respond to zoom gestures.
+                      style: _mapStyleString, //styling the google map theme
+                      // in the below line, specifying controller on map complete.
+                      onMapCreated: (GoogleMapController controller) {
+                        _controller.complete(
+                            controller); //is a callback that’s called when the map is ready to use. It provides the GoogleMapController, which is really helpful for performing certain actions on the map.
+                        windowController.googleMapController = controller;
+                        controller.animateCamera(
+                          CameraUpdate.newCameraPosition(
+                            CameraPosition(
+                              target: _currentLocation!,
+                              zoom: 14,
+                            ),
                           ),
-                        ),
-                      );
-                    }
-                  },
-                  //Markers are a great way to show a particular location.
-                  markers: _markerSet,
-                  onTap: (pos) {
-                    windowController
-                        .hideInfoWindow!(); // when we tap on the map, if the info window is open it will hide the window
-                  },
-                  onCameraMove: (pos) {
-                    windowController
-                        .onCameraMove!(); // it will move the window little bit when the user moving into other location on map
-                  },
-                  polygons:
-                      _polygons, //Polygons to represent routes or areas in Google Maps.
-                  polylines:
-                      _polylines, //Polylines to represent routes for various destinations on Google Maps.
+                        );
+                      },
+                      markers:
+                          _markerSet, //Markers are a great way to show a particular location.
+                      onTap: (pos) {
+                        windowController
+                            .hideInfoWindow!(); // when we tap on the map, if the info window is open it will hide the window
+                      },
+                      onCameraMove: (pos) {
+                        windowController
+                            .onCameraMove!(); // it will move the window little bit when the user moving into other location on map
+                      },
+                      polygons:
+                          _polygons, //Polygons to represent routes or areas in Google Maps.
+                      polylines:
+                          _polylines, //Polylines to represent routes for various destinations on Google Maps.
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 60),
+                      child: Container(
+                        width: MediaQuery.of(context).size.width,
+                        height: MediaQuery.of(context).size.height,
+                        color: Theme.of(context).scaffoldBackgroundColor,
+                        alignment: Alignment.center,
+                        child: (_placeList.isEmpty)
+                            ? const Center(child: Text("No Places Exist"))
+                            : SizedBox(
+                                height: MediaQuery.of(context).size.height,
+                                width: MediaQuery.of(context).size.width,
+                                child: ListView.builder(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 0.0),
+                                  itemCount: _placeList.length,
+                                  itemBuilder: (context, index) {
+                                    final place = _placeList[index];
+                                    return ListTile(
+                                      title: Text(place.description!.trim()),
+                                      onTap: () => _selectPlace(
+                                          place.placeId!, place.description!),
+                                    );
+                                  },
+                                ),
+                              ),
+                      ),
+                    ),
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                  horizontal: 16.0,
+                  vertical: (_searchController.text.isEmpty) ? 55.0 : 10),
+              child: SizedBox(
+                width: MediaQuery.of(context).size.width,
+                height: 60,
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: "Search places...",
+                    focusColor: Colors.white,
+                    enabledBorder: const OutlineInputBorder(),
+                    focusedBorder: const OutlineInputBorder(),
+                    floatingLabelBehavior: FloatingLabelBehavior.never,
+                    prefixIcon: const Icon(Icons.location_searching),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.text = "";
+                        setState(() {
+                          _placeList = [];
+                        });
+                      },
+                    ),
+                  ),
                 ),
-                CustomInfoWindow(
-                  // it will determine the dimension of each info window
-                  controller: windowController,
-                  height: 130,
-                  width: 260,
-                  offset: 50,
-                ),
-                PopupMenuButton(itemBuilder: (context) {
+              ),
+            ),
+          ),
+          CustomInfoWindow(
+            // it will determine the dimension of each info window
+            controller: windowController,
+            height: 130,
+            width: 260,
+            offset: 50,
+          ),
+          Positioned(
+            bottom: (_searchController.text.isEmpty) ? 90 : 20,
+            right: 10,
+            child: PopupMenuButton(
+                iconSize: 32,
+                itemBuilder: (context) {
                   return [
                     PopupMenuItem(
                         onTap: () => rootBundle
@@ -377,13 +422,85 @@ class _MyHomePageState extends State<MyHomePage> {
                             }),
                         child: const Text("Night")),
                   ];
-                })
-              ]),
+                }),
+          )
+        ]),
       ),
     );
   }
 
-  Future<Placemark?> covertFromLatLong(double lat, double long) async {
+  Widget windowContainer(
+      {dynamic img = "", String title = "", String subtitle = ""}) {
+    return Container(
+      width: MediaQuery.of(context).size.width,
+      height: double.infinity,
+      decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey)),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(12)),
+              child: Image.network(
+                height: 100,
+                width: MediaQuery.of(context).size.width,
+                loadingBuilder: (BuildContext context, Widget child,
+                    ImageChunkEvent? loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return const Center(
+                    child: CircularProgressIndicator(),
+                  );
+                },
+                errorBuilder: (context, error, stackTrace) {
+                  return Center(
+                    child: Image.asset(
+                      "assets/images/bot_image.jpg",
+                      filterQuality: FilterQuality.high,
+                      fit: BoxFit.fill,
+                    ),
+                  );
+                },
+                img,
+                filterQuality: FilterQuality.high,
+                fit: BoxFit.fitWidth,
+              ),
+            ),
+          ),
+          Padding(
+              padding: const EdgeInsets.only(top: 8.0, left: 8.0),
+              child: Text(title)),
+          Padding(
+              padding: const EdgeInsets.only(left: 8.0, bottom: 6.0),
+              child: Text(subtitle))
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String text) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12.0),
+      child: Row(
+        children: [
+          Icon(icon),
+          const SizedBox(width: 20),
+          Flexible(
+            child: Text(
+              text,
+              style: const TextStyle(color: Colors.grey),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<Placemark?> placemarkFromLatLong(double lat, double long) async {
     List<Placemark> placeMarks = await placemarkFromCoordinates(lat, long);
     if (placeMarks[0].street != null) {
       return placeMarks[0];
@@ -417,12 +534,14 @@ class _MyHomePageState extends State<MyHomePage> {
       await getPosition();
     } catch (e) {
       // Handle exceptions
-      throw ("Error getting location: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Location Error: ${e.toString()}')),
+      );
     }
   }
 
   Future<void> showAddress(double lat, double long) async {
-    Placemark? address = await covertFromLatLong(lat, long);
+    Placemark? address = await placemarkFromLatLong(lat, long);
 
     showModalBottomSheet(
       // context and builder are
@@ -459,7 +578,7 @@ class _MyHomePageState extends State<MyHomePage> {
                               mainAxisSize: MainAxisSize.max,
                               children: [
                                 Text(
-                                    "${address.locality}, ${address.subLocality}"),
+                                    "${address.locality}, ${address.administrativeArea}, ${address.country}"),
                                 InkWell(
                                   onTap: () {
                                     Navigator.of(context).pop();
@@ -471,6 +590,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                 )
                               ],
                             ),
+                            Text("${address.street}"),
                             Text(
                               "${lat.toStringAsFixed(5)}, ${long.toStringAsFixed(5)}",
                               style: const TextStyle(color: Colors.grey),
@@ -542,30 +662,14 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   } // it will display the little bit information's that we could received from latitude and longitude
 
-  Widget _buildInfoRow(IconData icon, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 12.0),
-      child: Row(
-        children: [
-          Icon(icon),
-          const SizedBox(width: 20),
-          Flexible(
-            child: Text(
-              text,
-              style: const TextStyle(color: Colors.grey),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> getPosition() async {
     // Get the current position
     userLoc.changeSettings(
         accuracy: loc.LocationAccuracy.high,
-        distanceFilter: 0.1,
-        interval: 1000);
+        distanceFilter:
+            0.1, //means that a new location update will be triggered if the device moves by at least 0.1 meters.
+        interval:
+            3000); //minimum time interval (in milliseconds) between location updates. updates will occur at least every 3000 milliseconds (3 second).
     userLoc.getLocation().then((location) {
       _currentLocation = LatLng(location.latitude!, location.longitude!);
       _markerSet.add(Marker(
@@ -578,21 +682,368 @@ class _MyHomePageState extends State<MyHomePage> {
             onTap: () async {
               await showAddress(location.latitude!, location.longitude!);
             }),
-        //rotation: 90
       ));
       setState(() {});
     });
   }
 
-  void _locationListener() async {
-    final GoogleMapController googleCnt = await _controller.future;
+  Future<void> _requestPermission() async {
+    try {
+      var status = await Permission.location.status;
+      // Handle the case where permission is denied.
+      if (status.isDenied || status.isPermanentlyDenied) {
+        status = await Permission.location.request();
+        if (status.isDenied || status.isPermanentlyDenied) {
+          throw ("Location permission is required to show Location button.");
+        }
+      }
+      _getUserCurrentLocation();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    }
+  }
 
-    userLoc.onLocationChanged.listen((change) {
-      _currentLocation = LatLng(change.latitude!, change.longitude!);
+  Future<void> getSuggestion(String input) async {
+    try {
+      String baseURL =
+          'https://maps.gomaps.pro/maps/api/place/queryautocomplete/json';
+      String request = '$baseURL?input=$input&key=${Config.googleMapPlacesKey}';
+      var response = await http.get(Uri.parse(request));
+      if (response.statusCode == 200) {
+        _placeList =
+            PlacesModel.fromJson(jsonDecode(response.body)).predictions!;
+        setState(() {});
+      } else {
+        throw Exception(
+            'Failed to load predictions, response status code: ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Places Error: ${e.toString()}')),
+      );
+    }
+  }
+
+  Future<void> _selectPlace(String placeID, String address) async {
+    List<Location> locations = await locationFromAddress(address);
+    if (locations.isNotEmpty) {
+      final Placemark? landmark = await placemarkFromLatLong(
+          locations.first.latitude, locations.first.longitude);
       setState(() {
-        googleCnt.animateCamera(CameraUpdate.newCameraPosition(
-            CameraPosition(target: _currentLocation!, zoom: 15)));
+        _currentLocation =
+            LatLng(locations.first.latitude, locations.first.longitude);
+        _markerSet.add(Marker(
+          markerId: MarkerId(placeID),
+          position: _currentLocation!,
+          infoWindow: InfoWindow(
+              title: "${landmark!.locality}, ${landmark.name}",
+              snippet: landmark.administrativeArea,
+              onTap: () {
+                showAddress(
+                    locations.first.latitude, locations.first.longitude);
+                //fetch location details such as marker image, address, place name etc. and display in window container
+              }),
+        ));
+        _placeList = [];
+        _searchController.text = "";
       });
-    });
+    }
   }
 }
+
+/*
+final PlacesModel cacheData = PlacesModel.fromJson({
+  "predictions": [
+    {
+      "description": "pizza near Paris, France",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 11}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text": "near Paris, France",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 5}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Paris"},
+        {"offset": 18, "value": "France"}
+      ]
+    },
+    {
+      "description":
+      "pizza near Pari Chowk, NRI City, Omega II, Noida, Uttar Pradesh, India",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 11}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text":
+        "near Pari Chowk, NRI City, Omega II, Noida, Uttar Pradesh, India",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 5}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Pari Chowk"},
+        {"offset": 23, "value": "NRI City"},
+        {"offset": 33, "value": "Omega II"},
+        {"offset": 43, "value": "Noida"},
+        {"offset": 50, "value": "Uttar Pradesh"},
+        {"offset": 65, "value": "India"}
+      ]
+    },
+    {
+      "description":
+      "pizza near Disneyland Park, Disneyland Drive, Anaheim, CA, USA",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 22}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text":
+        "near Disneyland Park, Disneyland Drive, Anaheim, CA, USA",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 16}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Disneyland Park"},
+        {"offset": 28, "value": "Disneyland Drive"},
+        {"offset": 46, "value": "Anaheim"},
+        {"offset": 55, "value": "CA"},
+        {"offset": 59, "value": "USA"}
+      ]
+    },
+    {
+      "description":
+      "pizza near Cathédrale Notre-Dame de Paris, Parvis Notre-Dame - place Jean-Paul-II, Paris, France",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 36}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text":
+        "near Cathédrale Notre-Dame de Paris, Parvis Notre-Dame - place Jean-Paul-II, Paris, France",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 30}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Cathédrale Notre-Dame de Paris"},
+        {"offset": 43, "value": "Parvis Notre-Dame - place Jean-Paul-II"},
+        {"offset": 83, "value": "Paris"},
+        {"offset": 90, "value": "France"}
+      ]
+    },
+    {
+      "description":
+      "pizza near Paris Beauvais Airport, Route de l'Aéroport, Tillé, France",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 11}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text":
+        "near Paris Beauvais Airport, Route de l'Aéroport, Tillé, France",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 5}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Paris Beauvais Airport"},
+        {"offset": 35, "value": "Route de l'Aéroport"},
+        {"offset": 56, "value": "Tillé"},
+        {"offset": 63, "value": "France"}
+      ]
+    },
+    {
+      "description": "pizza near Paris, France",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 11}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text": "near Paris, France",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 5}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Paris"},
+        {"offset": 18, "value": "France"}
+      ]
+    },
+    {
+      "description":
+      "pizza near Pari Chowk, NRI City, Omega II, Noida, Uttar Pradesh, India",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 11}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text":
+        "near Pari Chowk, NRI City, Omega II, Noida, Uttar Pradesh, India",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 5}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Pari Chowk"},
+        {"offset": 23, "value": "NRI City"},
+        {"offset": 33, "value": "Omega II"},
+        {"offset": 43, "value": "Noida"},
+        {"offset": 50, "value": "Uttar Pradesh"},
+        {"offset": 65, "value": "India"}
+      ]
+    },
+    {
+      "description":
+      "pizza near Disneyland Park, Disneyland Drive, Anaheim, CA, USA",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 22}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text":
+        "near Disneyland Park, Disneyland Drive, Anaheim, CA, USA",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 16}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Disneyland Park"},
+        {"offset": 28, "value": "Disneyland Drive"},
+        {"offset": 46, "value": "Anaheim"},
+        {"offset": 55, "value": "CA"},
+        {"offset": 59, "value": "USA"}
+      ]
+    },
+    {
+      "description":
+      "pizza near Cathédrale Notre-Dame de Paris, Parvis Notre-Dame - place Jean-Paul-II, Paris, France",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 36}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text":
+        "near Cathédrale Notre-Dame de Paris, Parvis Notre-Dame - place Jean-Paul-II, Paris, France",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 30}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Cathédrale Notre-Dame de Paris"},
+        {"offset": 43, "value": "Parvis Notre-Dame - place Jean-Paul-II"},
+        {"offset": 83, "value": "Paris"},
+        {"offset": 90, "value": "France"}
+      ]
+    },
+    {
+      "description":
+      "pizza near Paris Beauvais Airport, Route de l'Aéroport, Tillé, France",
+      "matched_substrings": [
+        {"length": 5, "offset": 0},
+        {"length": 3, "offset": 11}
+      ],
+      "place_id": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "reference": "ChIJD7fiBh9u5kcRYJSMaMOCCwQ",
+      "structured_formatting": {
+        "main_text": "pizza",
+        "main_text_matched_substrings": [
+          {"length": 5, "offset": 0}
+        ],
+        "secondary_text":
+        "near Paris Beauvais Airport, Route de l'Aéroport, Tillé, France",
+        "secondary_text_matched_substrings": [
+          {"length": 3, "offset": 5}
+        ]
+      },
+      "terms": [
+        {"offset": 0, "value": "pizza"},
+        {"offset": 6, "value": "near"},
+        {"offset": 11, "value": "Paris Beauvais Airport"},
+        {"offset": 35, "value": "Route de l'Aéroport"},
+        {"offset": 56, "value": "Tillé"},
+        {"offset": 63, "value": "France"}
+      ]
+    }
+  ],
+  "status": "OK"
+}); */
